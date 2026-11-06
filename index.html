@@ -185,6 +185,37 @@
     </form>
   </section>
 
+  <!-- PayPay の取り込み（家計簿の画面） -->
+  <section id="importArea" class="mb-4">
+    <button id="importOpen" class="tap w-full rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-600 text-sm font-bold text-slate-600 dark:text-slate-300" type="button">📥 PayPay の履歴を取り込む</button>
+    <div id="importPanel" class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4" hidden>
+      <div class="flex items-center justify-between mb-1">
+        <h2 class="font-bold">PayPay の履歴を取り込む</h2>
+        <button id="importClose" class="tap rounded-xl" type="button" aria-label="閉じる">✕</button>
+      </div>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mb-3 leading-relaxed">
+        PayPay アプリの「取引履歴」右上の「取引履歴のダウンロード」で保存した CSV ファイルを選んでください。
+        同じ取引は二重には入りません。チャージは取り込みません。
+      </p>
+      <label class="tap flex items-center justify-center rounded-xl bg-sky-600 text-white font-bold cursor-pointer">
+        ファイルを選ぶ
+        <input id="importFile" type="file" accept=".csv,text/csv" class="sr-only">
+      </label>
+      <div id="importMsg" class="text-sm mt-3"></div>
+      <div id="importPreview" hidden>
+        <div class="flex items-center justify-between gap-2 my-2">
+          <span id="importSummary" class="text-sm font-bold"></span>
+          <div class="flex gap-1 shrink-0 text-sm">
+            <button id="importAll" class="tap px-3 rounded-xl bg-slate-100 dark:bg-slate-700" type="button">全部選ぶ</button>
+            <button id="importNone" class="tap px-3 rounded-xl bg-slate-100 dark:bg-slate-700" type="button">全部外す</button>
+          </div>
+        </div>
+        <ul id="importList" class="divide-y divide-slate-100 dark:divide-slate-700 max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700"></ul>
+        <button id="importRun" class="tap w-full mt-3 rounded-xl bg-sky-600 text-white font-bold disabled:opacity-60" type="button">取り込む</button>
+      </div>
+    </div>
+  </section>
+
   <!-- 履歴 -->
   <section class="mb-6">
     <h2 id="historyTitle" class="font-bold mb-2">履歴</h2>
@@ -643,6 +674,7 @@ function renderView() {
   $('mealCard').hidden = !meal;
   $('moneyForm').hidden = meal;
   $('mealForm').hidden = !meal;
+  $('importArea').hidden = meal;
   const on = 'text-sky-600 dark:text-sky-400';
   const off = 'text-slate-400 dark:text-slate-500';
   $('viewMoney').className = 'tap py-2 flex flex-col items-center text-xs font-bold ' + (meal ? off : on);
@@ -882,6 +914,252 @@ function goMonth(month, day) {
   load();
 }
 
+/* ---------- PayPay の取り込み ---------- */
+
+const SHOP_CAT_STORE = 'kakeibo-shop-cat';   // 取引先 → カテゴリ（取り込むたびに覚える）
+
+/** 取引先の名前からカテゴリを当てる決まり（上から順に見る。ガスト→食費 のように、先に書いたほうが勝つ） */
+const SHOP_RULES = [
+  [/セブン|ファミリーマート|ファミマ|ローソン|ミニストップ|デイリーヤマザキ|セイコーマート|スーパー|イオン|西友|マルエツ|イトーヨーカ|まいばすけっと|オーケー|業務スーパー|マクドナルド|すき家|吉野家|松屋|スターバックス|ドトール|コメダ|ガスト|サイゼリヤ|くら寿司|スシロー|ケンタッキー|モスバーガー|Uber ?Eats|出前館|食堂|カフェ|ベーカリー|弁当/i, '食費'],
+  [/マツモトキヨシ|マツキヨ|ウエルシア|ツルハ|スギ薬局|サンドラッグ|ココカラ|ドラッグ|薬局|ダイソー|セリア|キャンドゥ|ニトリ|無印良品|カインズ|コーナン|ドン・キホーテ|ドンキ/i, '日用品'],
+  [/JR|鉄道|メトロ|バス|タクシー|駐車|パーキング|ENEOS|出光|ガソリン/i, '交通費'],
+  [/電力|でんき|電気|ガス|水道/, '光熱費'],
+  [/ドコモ|docomo|ソフトバンク|SoftBank|楽天モバイル|ahamo|povo|LINEMO|ワイモバイル|UQ/i, '通信費'],
+  [/映画|シネマ|TOHO|カラオケ|Steam|任天堂|Nintendo|PlayStation|Netflix|Spotify|書店|ブックオフ|アニメイト|タワーレコード/i, '娯楽']
+];
+
+const imp = { items: [], busy: false };   // 確認一覧の中身
+
+/** CSV の文字を表（行 × 列の配列）にする（"…" で囲まれたカンマ・改行にも対応） */
+function parseCsv(text) {
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false;
+      } else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
+/** 「1,234」「¥1,234」などを数にする（無い・「-」は 0） */
+function yenNum(s) {
+  const t = normNum(s).replace(/[円¥￥]/g, '').replace(/^-/, '');
+  return /^\d+$/.test(t) ? Number(t) : 0;
+}
+
+/** カテゴリを当てる：覚えたもの → 決まり → その他 */
+function guessCat(shop, kind) {
+  const cats = state.categories[kind] || [];
+  const fallback = cats.indexOf('その他') >= 0 ? 'その他' : cats[0];
+  if (kind !== '支出') return fallback;
+  let learned = {};
+  try { learned = JSON.parse(store.get(SHOP_CAT_STORE) || '{}'); } catch (e) {}
+  if (learned[shop] && cats.indexOf(learned[shop]) >= 0) return learned[shop];
+  for (const [re, cat] of SHOP_RULES) if (re.test(shop) && cats.indexOf(cat) >= 0) return cat;
+  return fallback;
+}
+
+/**
+ * PayPay の取引履歴 CSV を読む。列は名前で探す（取引日・出金金額（円）・入金金額（円）・取引内容・取引先・取引番号）。
+ * 戻り値：{ items, skipped } ／ PayPay の CSV でなければ null
+ */
+function parsePayPay(text) {
+  const rows = parseCsv(String(text).replace(/^﻿/, ''));
+  let hi = -1;
+  for (let i = 0; i < Math.min(5, rows.length); i++) {
+    if (rows[i].some(c => c.replace(/\s/g, '') === '取引番号')) { hi = i; break; }
+  }
+  if (hi < 0) return null;
+  const head = rows[hi].map(c => c.replace(/\s/g, ''));
+  const col = name => head.findIndex(h => h.indexOf(name) === 0);
+  const c = { date: col('取引日'), out: col('出金金額'), inn: col('入金金額'), kind: col('取引内容'), shop: col('取引先'), no: col('取引番号') };
+  if (c.date < 0 || c.no < 0 || (c.out < 0 && c.inn < 0)) return null;
+
+  const items = [];
+  let skipped = 0;
+  rows.slice(hi + 1).forEach(r => {
+    const get = i => (i >= 0 ? String(r[i] == null ? '' : r[i]).trim() : '');
+    const m = /(\d{4})\D(\d{1,2})\D(\d{1,2})/.exec(get(c.date));
+    const no = get(c.no).replace(/[^0-9A-Za-z_-]/g, '');
+    const out = yenNum(get(c.out)), inn = yenNum(get(c.inn));
+    const kindText = get(c.kind), shop = get(c.shop);
+    if (!m || !no || (!out && !inn) || /チャージ/.test(kindText)) { skipped++; return; }
+    const kind = out ? '支出' : '収入';
+    items.push({
+      importId: 'paypay:' + no,
+      date: m[1] + '-' + pad(m[2]) + '-' + pad(m[3]),
+      kind: kind,
+      amount: out || inn,
+      name: shop || kindText || 'PayPay',
+      kindText: kindText,
+      cat: guessCat(shop, kind),
+      // 支払いは最初から選んでおく。送金・出金・入金は自分で選んだときだけ取り込む
+      checked: kind === '支出' && !/送金|出金/.test(kindText),
+      done: false
+    });
+  });
+  items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return { items: items, skipped: skipped };
+}
+
+function openImport() {
+  $('importOpen').hidden = true;
+  $('importPanel').hidden = false;
+}
+
+function closeImport() {
+  imp.items = [];
+  $('importFile').value = '';
+  $('importMsg').textContent = '';
+  $('importPreview').hidden = true;
+  $('importPanel').hidden = true;
+  $('importOpen').hidden = false;
+}
+
+/** ファイルを選んだら読み取って、確認一覧を出す */
+async function onImportFile() {
+  const file = $('importFile').files[0];
+  if (!file) return;
+  $('importPreview').hidden = true;
+  const msg = $('importMsg');
+  msg.className = 'text-sm mt-3';
+  msg.textContent = '';
+  msg.appendChild(el('span', 'spin'));
+  msg.appendChild(document.createTextNode(' 読み取っています…'));
+
+  let parsed = null;
+  try {
+    parsed = parsePayPay(await file.text());
+    // 文字化けで見出しが読めないときは Shift_JIS として読み直す
+    if (!parsed && window.TextDecoder) parsed = parsePayPay(new TextDecoder('shift_jis').decode(await file.arrayBuffer()));
+  } catch (e) {
+    parsed = null;
+  }
+  if (!parsed) {
+    msg.className = 'text-sm mt-3 text-red-600 dark:text-red-400';
+    msg.textContent = 'PayPay の取引履歴 CSV として読み取れませんでした。PayPay アプリの「取引履歴のダウンロード」で保存したファイルを選んでください。';
+    return;
+  }
+  if (!parsed.items.length) {
+    msg.className = 'text-sm mt-3';
+    msg.textContent = '取り込める取引がありませんでした' + (parsed.skipped ? '（チャージなど ' + parsed.skipped + ' 件は対象外）' : '');
+    return;
+  }
+
+  // 取り込み済みのものに印を付ける（失敗しても、二重登録はサーバーが防ぐので先へ進む）
+  try {
+    const res = await api('importedIds');
+    const done = {};
+    res.ids.forEach(id => { done[id] = true; });
+    parsed.items.forEach(x => { if (done[x.importId]) { x.done = true; x.checked = false; } });
+  } catch (e) {
+    if (e.badKey) return;
+  }
+  imp.items = parsed.items;
+  msg.textContent = parsed.skipped ? 'チャージなど ' + parsed.skipped + ' 件は対象外です。' : '';
+  renderImport();
+}
+
+/** 確認一覧を描く */
+function renderImport() {
+  const ul = $('importList');
+  ul.textContent = '';
+  imp.items.forEach(x => {
+    const li = el('li', 'px-3 py-2 ' + (x.done ? 'opacity-50' : ''));
+    const top = el('label', 'flex items-center gap-3 min-h-[44px] cursor-pointer');
+    const cb = el('input', 'w-6 h-6 shrink-0 accent-sky-600');
+    cb.type = 'checkbox';
+    cb.checked = x.checked;
+    cb.disabled = x.done || imp.busy;
+    cb.onchange = () => { x.checked = cb.checked; updateImportSummary(); };
+    top.appendChild(cb);
+
+    const info = el('div', 'flex-1 min-w-0');
+    const l1 = el('div', 'flex items-center gap-2 min-w-0');
+    l1.appendChild(el('span', 'shrink-0 text-xs font-bold rounded-md px-1.5 py-0.5 ' + (BADGE[x.kind] || ''), x.kind));
+    l1.appendChild(el('span', 'truncate', x.name));
+    info.appendChild(l1);
+    const [, mm, dd] = x.date.split('-').map(Number);
+    info.appendChild(el('div', 'text-xs text-slate-500 dark:text-slate-400', mm + '/' + dd + '　' + x.kindText + (x.done ? '　取り込み済み' : '')));
+    top.appendChild(info);
+    top.appendChild(el('span', 'shrink-0 font-bold tabular-nums ' + (x.kind === '収入' ? 'text-emerald-600 dark:text-emerald-400' : ''), (x.kind === '収入' ? '+' : '') + yen(x.amount)));
+    li.appendChild(top);
+
+    if (!x.done) {
+      const sel = el('select', 'field mt-1');
+      fillSelect(sel, state.categories[x.kind] || [], x.cat);
+      sel.disabled = imp.busy;
+      sel.onchange = () => { x.cat = sel.value; };
+      sel.setAttribute('aria-label', x.name + ' のカテゴリ');
+      li.appendChild(sel);
+    }
+    ul.appendChild(li);
+  });
+  $('importPreview').hidden = false;
+  updateImportSummary();
+}
+
+/** 選んだ件数と合計を出す */
+function updateImportSummary() {
+  const sel = imp.items.filter(x => x.checked && !x.done);
+  let out = 0, inn = 0;
+  sel.forEach(x => { if (x.kind === '収入') inn += x.amount; else out += x.amount; });
+  const done = imp.items.filter(x => x.done).length;
+  $('importSummary').textContent = sel.length + ' 件を選択（支出 ' + yen(out) + (inn ? '・収入 ' + yen(inn) : '') + '）' +
+    (done ? '／取り込み済み ' + done + ' 件' : '');
+  const btn = $('importRun');
+  if (!imp.busy) btn.textContent = sel.length ? sel.length + ' 件を取り込む' : '取り込む';
+  btn.disabled = imp.busy || !sel.length;
+}
+
+/** 選んだものをまとめて送る */
+async function runImport() {
+  const sel = imp.items.filter(x => x.checked && !x.done);
+  if (!sel.length || imp.busy) return;
+  imp.busy = true;
+  const btn = $('importRun');
+  btn.disabled = true;
+  btn.textContent = '';
+  btn.appendChild(el('span', 'spin'));
+  btn.appendChild(document.createTextNode(' 取り込み中…'));
+  try {
+    const records = sel.map(x => ({
+      kind: x.kind, date: x.date, cat: x.cat, name: x.name.slice(0, 100),
+      amount: x.amount, memo: 'PayPay', importId: x.importId
+    }));
+    const data = await api('importRecords', { records: records, month: state.month, day: state.day });
+    // 選んだカテゴリを覚えて、次から最初に選ぶ
+    let learned = {};
+    try { learned = JSON.parse(store.get(SHOP_CAT_STORE) || '{}'); } catch (e) {}
+    sel.forEach(x => { if (x.kind === '支出' && x.name) learned[x.name] = x.cat; });
+    store.set(SHOP_CAT_STORE, JSON.stringify(learned));
+
+    hideError();
+    applyMonthData(data);
+    imp.busy = false;
+    closeImport();
+    toast(data.added + ' 件を取り込みました' + (data.skipped ? '（' + data.skipped + ' 件は取り込み済み）' : ''));
+    if (data.errorCount) {
+      showError(data.errorCount + ' 件は取り込めませんでした：' +
+        data.errors.map(e => (sel[e.index] ? sel[e.index].name : '') + '（' + e.message + '）').join('、'));
+    }
+  } catch (e) {
+    imp.busy = false;
+    if (!e.badKey) { toast(e.message); showError(e.message); }
+    updateImportSummary();
+  }
+}
+
 /** 表示する日を変える（別の月の日なら月も移って読み込む） */
 function goDay(d) {
   if (d.slice(0, 7) !== state.month) { goMonth(d.slice(0, 7), d); return; }
@@ -941,6 +1219,12 @@ function init() {
     if (!state.kcalManual) autoKcal(); else $('kcalHint').textContent = '（手入力）';
   });
   $('editCancel').onclick = cancelEdit;
+  $('importOpen').onclick = openImport;
+  $('importClose').onclick = closeImport;
+  $('importFile').addEventListener('change', onImportFile);
+  $('importAll').onclick = () => { imp.items.forEach(x => { if (!x.done) x.checked = true; }); renderImport(); };
+  $('importNone').onclick = () => { imp.items.forEach(x => { x.checked = false; }); renderImport(); };
+  $('importRun').onclick = runImport;
   $('settingsBtn').onclick = () => { const p = $('settingsPanel'); p.hidden = !p.hidden; if (!p.hidden) fillSettings(); };
   $('settingsForm').addEventListener('submit', saveSettings);
   $('forgetBtn').onclick = () => {
