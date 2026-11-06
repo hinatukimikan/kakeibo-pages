@@ -23,7 +23,7 @@
   html { -webkit-text-size-adjust: 100%; }
   body {
     padding-top: env(safe-area-inset-top);
-    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    padding-bottom: calc(88px + env(safe-area-inset-bottom));   /* 下の切り替えタブの分をあける */
     -webkit-tap-highlight-color: transparent;
   }
   /* iPhone で入力時に拡大されないよう、入力欄は 16px 以上 */
@@ -47,7 +47,9 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .bar { transition: width .3s ease; }
-  #toast { bottom: calc(16px + env(safe-area-inset-bottom)); }
+  #toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+  /* 画面下の切り替えタブ（家計簿／栄養管理） */
+  #viewNav { padding-bottom: env(safe-area-inset-bottom); }
 </style>
 </head>
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 antialiased">
@@ -68,7 +70,7 @@
 <div id="app" class="max-w-3xl mx-auto px-4" hidden>
 
   <header class="flex items-center justify-between pt-3 pb-2">
-    <h1 class="text-xl font-bold">家計簿</h1>
+    <h1 id="appTitle" class="text-xl font-bold">家計簿</h1>
     <div class="flex items-center gap-2">
       <span id="syncState" class="text-xs text-slate-500 dark:text-slate-400"></span>
       <button id="settingsBtn" class="tap rounded-xl text-xl" type="button" aria-label="設定">⚙️</button>
@@ -94,17 +96,27 @@
     </button>
   </section>
 
-  <!-- 月の切り替え -->
-  <div class="flex items-center justify-between mb-3">
+  <!-- 月の切り替え（家計簿の画面） -->
+  <div id="monthNav" class="flex items-center justify-between mb-3">
     <button id="prevMonth" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-lg" type="button" aria-label="前の月">‹</button>
     <div id="monthLabel" class="text-lg font-bold"></div>
     <button id="nextMonth" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-lg" type="button" aria-label="次の月">›</button>
   </div>
 
+  <!-- 日の切り替え（栄養管理の画面） -->
+  <div id="dayNav" class="flex items-center justify-between gap-2 mb-3" hidden>
+    <button id="prevDay" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-lg" type="button" aria-label="前の日">‹</button>
+    <div class="flex items-center gap-2">
+      <input id="dayPicker" class="field !w-auto font-bold" type="date" aria-label="表示する日">
+      <button id="todayBtn" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-sm px-3" type="button">今日</button>
+    </div>
+    <button id="nextDay" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-lg" type="button" aria-label="次の日">›</button>
+  </div>
+
   <!-- ダッシュボード -->
-  <div class="grid gap-3 sm:grid-cols-2 mb-4">
+  <div class="mb-4">
     <!-- カード1：お金 -->
-    <section class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4">
+    <section id="moneyCard" class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4">
       <h2 id="moneyTitle" class="text-sm font-bold text-slate-500 dark:text-slate-400 mb-2">今月のお金</h2>
       <dl class="grid grid-cols-3 gap-2 text-center">
         <div><dt class="text-xs text-slate-500 dark:text-slate-400">収入</dt><dd id="sumIncome" class="font-bold text-base sm:text-lg tabular-nums"></dd></div>
@@ -114,11 +126,8 @@
     </section>
 
     <!-- カード2：カロリー -->
-    <section class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4">
-      <div class="flex items-center justify-between gap-2 mb-2">
-        <h2 class="text-sm font-bold text-slate-500 dark:text-slate-400">摂取カロリー</h2>
-        <input id="dayPicker" class="field !w-auto !min-h-[40px] !py-1" type="date" aria-label="表示する日">
-      </div>
+    <section id="mealCard" class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4" hidden>
+      <h2 id="mealTitle" class="text-sm font-bold text-slate-500 dark:text-slate-400 mb-2">今日の摂取カロリー</h2>
       <div class="flex items-baseline justify-between">
         <div><span id="kcalTotal" class="text-2xl font-bold tabular-nums"></span><span class="text-sm text-slate-500 dark:text-slate-400"> / <span id="kcalGoal"></span> kcal</span></div>
         <div id="kcalLeft" class="text-xs"></div>
@@ -132,11 +141,6 @@
 
   <!-- 入力エリア -->
   <section id="inputArea" class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4 mb-4">
-    <div class="grid grid-cols-2 gap-2 mb-3" role="tablist">
-      <button id="tabMoney" class="tap rounded-xl font-bold" type="button" role="tab">💰 お金</button>
-      <button id="tabMeal" class="tap rounded-xl font-bold" type="button" role="tab">🍚 食事</button>
-    </div>
-
     <div id="editBar" class="mb-3 flex items-center justify-between rounded-xl bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 px-3 py-1 text-sm" hidden>
       <span>✏️ 記録を編集中</span>
       <button id="editCancel" class="tap underline" type="button">やめる</button>
@@ -183,17 +187,22 @@
 
   <!-- 履歴 -->
   <section class="mb-6">
-    <div class="flex items-center justify-between mb-2">
-      <h2 class="font-bold">履歴</h2>
-      <div class="flex gap-1 text-sm" id="filterBtns">
-        <button class="tap px-3 rounded-xl" type="button" data-filter="all">すべて</button>
-        <button class="tap px-3 rounded-xl" type="button" data-filter="money">お金</button>
-        <button class="tap px-3 rounded-xl" type="button" data-filter="meal">食事</button>
-      </div>
-    </div>
+    <h2 id="historyTitle" class="font-bold mb-2">履歴</h2>
     <div id="history" class="grid gap-3"></div>
   </section>
 </div>
+
+<!-- 画面下の切り替えタブ -->
+<nav id="viewNav" class="fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur" hidden>
+  <div class="max-w-3xl mx-auto grid grid-cols-2">
+    <button id="viewMoney" class="tap py-2 flex flex-col items-center text-xs font-bold" type="button">
+      <span class="text-2xl leading-none">💰</span>家計簿
+    </button>
+    <button id="viewMeal" class="tap py-2 flex flex-col items-center text-xs font-bold" type="button">
+      <span class="text-2xl leading-none">🍚</span>栄養管理
+    </button>
+  </div>
+</nav>
 
 <!-- お知らせ（トースト） -->
 <div id="toast" class="fixed left-1/2 -translate-x-1/2 z-50 rounded-xl bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-3 text-sm shadow-lg" hidden></div>
@@ -211,6 +220,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwynDSPlBZ0jIuAKdnaQw-s
 
 const KEY_STORE = 'kakeibo-key';
 const CACHE_STORE = 'kakeibo-cache';
+const VIEW_STORE = 'kakeibo-view';   // 最後に開いていた画面（money / meal）
 const CACHE_MONTHS = 12;   // 端末に控えておく月の数
 
 // サーバーから届くまでの仮の値（サーバーの CATEGORIES・DEFAULT_GOALS と同じ）
@@ -254,6 +264,12 @@ function shiftMonth(month, n) {
   const [y, m] = month.split('-').map(Number);
   const d = new Date(y, m - 1 + n, 1);
   return d.getFullYear() + '-' + pad(d.getMonth() + 1);
+}
+
+/** yyyy-MM-dd を n 日ずらす（月またぎ・年またぎも正しく） */
+function shiftDay(day, n) {
+  const [y, m, d] = day.split('-').map(Number);
+  return ymd(new Date(y, m - 1, d + n));
 }
 
 /** 「2026年11月」 */
@@ -301,8 +317,7 @@ const state = {
   records: [],                  // 表示中の月の記録
   goals: Object.assign({}, DEFAULT_GOALS),
   categories: DEFAULT_CATEGORIES,
-  filter: 'all',                // 履歴の絞り込み：all / money / meal
-  tab: 'money',                 // 入力タブ：money / meal
+  view: 'money',                // 表示中の画面：money（家計簿）／ meal（栄養管理）
   moneyKind: '支出',            // お金の入力：支出 / 収入
   editingId: null,              // 編集中の記録の ID（新規なら null）
   kcalManual: false,            // kcal を手で入れたか（入れたら自動計算しない）
@@ -463,6 +478,7 @@ function renderDashboard() {
 
   // カロリー
   $('dayPicker').value = state.day;
+  $('mealTitle').textContent = (state.day === today() ? '今日' : dayText(state.day)) + 'の摂取カロリー';
   const t = mealTotal(state.records, state.day);
   const g = state.goals;
   $('kcalTotal').textContent = Math.round(t.kcal).toLocaleString('ja-JP');
@@ -510,14 +526,11 @@ function renderHistory() {
   const box = $('history');
   box.textContent = '';
 
-  document.querySelectorAll('#filterBtns button').forEach(b => {
-    const on = b.dataset.filter === state.filter;
-    b.className = 'tap px-3 rounded-xl ' + (on ? 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-white dark:bg-slate-800');
-    b.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
-
-  const list = state.records.filter(r =>
-    state.filter === 'all' ? true : state.filter === 'meal' ? r.kind === '食事' : r.kind !== '食事');
+  // 家計簿の画面：支出・収入と、金額の入った食事（食費として支出に入るので）
+  // 栄養管理の画面：食事だけ
+  const meal = state.view === 'meal';
+  $('historyTitle').textContent = meal ? monthText(state.month) + 'の食事' : monthText(state.month) + 'のお金の履歴';
+  const list = state.records.filter(r => meal ? r.kind === '食事' : (r.kind !== '食事' || r.amount != null));
 
   if (!list.length) {
     if (state.syncing) {
@@ -545,8 +558,9 @@ function renderHistory() {
     let spend = 0, kcal = 0;
     g.items.forEach(r => { if (r.kind !== '収入') spend += r.amount || 0; if (r.kind === '食事') kcal += r.kcal || 0; });
     const sub = [];
-    if (spend) sub.push('支出 ' + yen(spend));
-    if (kcal) sub.push(Math.round(kcal).toLocaleString('ja-JP') + ' kcal');
+    if (!meal && spend) sub.push('支出 ' + yen(spend));
+    if (meal && kcal) sub.push(Math.round(kcal).toLocaleString('ja-JP') + ' kcal');
+    if (meal && g.date === state.day) head.className += ' ring-2 ring-inset ring-orange-300 dark:ring-orange-700';   // 表示中の日
     head.appendChild(el('span', 'text-xs text-slate-500 dark:text-slate-300 tabular-nums', sub.join('・')));
     sec.appendChild(head);
 
@@ -618,16 +632,36 @@ function fillSelect(sel, items, keep) {
   if (items.indexOf(cur) >= 0) sel.value = cur;
 }
 
+/** 家計簿／栄養管理の画面を切り替える（見せる部分を出し入れするだけ） */
+function renderView() {
+  const meal = state.view === 'meal';
+  $('appTitle').textContent = meal ? '栄養管理' : '家計簿';
+  document.title = meal ? '栄養管理' : '家計簿';
+  $('monthNav').hidden = meal;
+  $('moneyCard').hidden = meal;
+  $('dayNav').hidden = !meal;
+  $('mealCard').hidden = !meal;
+  $('moneyForm').hidden = meal;
+  $('mealForm').hidden = !meal;
+  const on = 'text-sky-600 dark:text-sky-400';
+  const off = 'text-slate-400 dark:text-slate-500';
+  $('viewMoney').className = 'tap py-2 flex flex-col items-center text-xs font-bold ' + (meal ? off : on);
+  $('viewMeal').className = 'tap py-2 flex flex-col items-center text-xs font-bold ' + (meal ? on : off);
+  $('viewMoney').setAttribute('aria-current', meal ? 'false' : 'page');
+  $('viewMeal').setAttribute('aria-current', meal ? 'page' : 'false');
+}
+
+/** 画面を変える（編集中なら編集をやめる） */
+function setView(view) {
+  if (state.view === view) return;
+  if (state.editingId) cancelEdit();
+  state.view = view;
+  store.set(VIEW_STORE, view);
+  renderAll();
+  window.scrollTo(0, 0);
+}
+
 function renderForms() {
-  // タブ
-  const on = 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900';
-  const off = 'bg-slate-100 dark:bg-slate-700';
-  $('tabMoney').className = 'tap rounded-xl font-bold ' + (state.tab === 'money' ? on : off);
-  $('tabMeal').className = 'tap rounded-xl font-bold ' + (state.tab === 'meal' ? on : off);
-  $('tabMoney').setAttribute('aria-selected', state.tab === 'money');
-  $('tabMeal').setAttribute('aria-selected', state.tab === 'meal');
-  $('moneyForm').hidden = state.tab !== 'money';
-  $('mealForm').hidden = state.tab !== 'meal';
 
   // 支出・収入の切り替え
   const exp = state.moneyKind === '支出';
@@ -679,9 +713,10 @@ function cancelEdit() {
 function startEdit(r) {
   state.editingId = r.id;
   const v = x => (x == null ? '' : String(x));
+  state.view = r.kind === '食事' ? 'meal' : 'money';   // 家計簿の画面で食事を直すときは栄養管理へ移る
+  store.set(VIEW_STORE, state.view);
+  renderAll();
   if (r.kind === '食事') {
-    state.tab = 'meal';
-    renderForms();
     $('fDate').value = r.date; $('fCat').value = r.cat; $('fName').value = r.name;
     $('fP').value = v(r.p); $('fF').value = v(r.f); $('fC').value = v(r.c);
     $('fAmount').value = v(r.amount); $('fMemo').value = r.memo;
@@ -691,7 +726,6 @@ function startEdit(r) {
     $('fKcal').value = v(r.kcal);
     autoKcal();
   } else {
-    state.tab = 'money';
     state.moneyKind = r.kind;
     renderForms();
     $('mDate').value = r.date; $('mCat').value = r.cat; $('mName').value = r.name;
@@ -816,6 +850,7 @@ function forgetKey() {
 
 function showKeyScreen(msg) {
   $('app').hidden = true;
+  $('viewNav').hidden = true;
   $('keyScreen').hidden = false;
   if (msg) $('keyMsg').textContent = msg;
   $('keyInput').value = '';
@@ -824,11 +859,13 @@ function showKeyScreen(msg) {
 function showApp() {
   $('keyScreen').hidden = true;
   $('app').hidden = false;
+  $('viewNav').hidden = false;
 }
 
 /* ---------- 全体の描き直し ---------- */
 
 function renderAll() {
+  renderView();
   renderDashboard();
   renderForms();
   renderHistory();
@@ -845,6 +882,14 @@ function goMonth(month, day) {
   load();
 }
 
+/** 表示する日を変える（別の月の日なら月も移って読み込む） */
+function goDay(d) {
+  if (d.slice(0, 7) !== state.month) { goMonth(d.slice(0, 7), d); return; }
+  state.day = d;
+  renderDashboard();
+  renderHistory();   // 表示中の日の印を付け直す
+}
+
 /* ---------- 起動 ---------- */
 
 function init() {
@@ -856,6 +901,7 @@ function init() {
     try { history.replaceState(null, '', location.pathname + (qs.toString() ? '?' + qs : '') + location.hash); } catch (e) {}
   }
   state.key = store.get(KEY_STORE) || '';
+  if (store.get(VIEW_STORE) === 'meal') state.view = 'meal';
 
   // 入力欄の初期値
   $('mDate').value = today();
@@ -878,11 +924,13 @@ function init() {
   $('dayPicker').addEventListener('change', () => {
     const d = $('dayPicker').value;
     if (!d) { $('dayPicker').value = state.day; return; }
-    if (d.slice(0, 7) !== state.month) goMonth(d.slice(0, 7), d);   // 別の月の日なら月も移る
-    else { state.day = d; renderDashboard(); }
+    goDay(d);
   });
-  $('tabMoney').onclick = () => { state.tab = 'money'; renderForms(); };
-  $('tabMeal').onclick = () => { state.tab = 'meal'; renderForms(); };
+  $('prevDay').onclick = () => goDay(shiftDay(state.day, -1));
+  $('nextDay').onclick = () => goDay(shiftDay(state.day, 1));
+  $('todayBtn').onclick = () => goDay(today());
+  $('viewMoney').onclick = () => setView('money');
+  $('viewMeal').onclick = () => setView('meal');
   $('kindExpense').onclick = () => { state.moneyKind = '支出'; renderForms(); };
   $('kindIncome').onclick = () => { state.moneyKind = '収入'; renderForms(); };
   $('moneyForm').addEventListener('submit', ev => { ev.preventDefault(); submitRecord('money'); });
@@ -893,9 +941,6 @@ function init() {
     if (!state.kcalManual) autoKcal(); else $('kcalHint').textContent = '（手入力）';
   });
   $('editCancel').onclick = cancelEdit;
-  document.querySelectorAll('#filterBtns button').forEach(b => {
-    b.onclick = () => { state.filter = b.dataset.filter; renderHistory(); };
-  });
   $('settingsBtn').onclick = () => { const p = $('settingsPanel'); p.hidden = !p.hidden; if (!p.hidden) fillSettings(); };
   $('settingsForm').addEventListener('submit', saveSettings);
   $('forgetBtn').onclick = () => {
