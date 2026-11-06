@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta name="format-detection" content="telephone=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="家計簿">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<title>家計簿</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root { color-scheme: light dark; }
+  /* hidden を付けたものは必ず隠す（Tailwind の flex などに負けないように） */
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* iPhone で入力時に拡大されないよう、入力欄は 16px 以上 */
+  input, select, textarea { font-size: 16px !important; }
+  .field {
+    display: block; width: 100%; min-height: 44px; padding: 8px 12px;
+    border-radius: 10px; border: 1px solid rgb(203 213 225); background: #fff; color: inherit;
+  }
+  .field:focus { outline: 2px solid rgb(14 165 233); outline-offset: 0; border-color: transparent; }
+  textarea.field { min-height: 64px; resize: vertical; }
+  input[type="date"].field { -webkit-appearance: none; appearance: none; }
+  input[type="date"]::-webkit-date-and-time-value { text-align: left; }
+  @media (prefers-color-scheme: dark) {
+    .field { background: rgb(15 23 42); border-color: rgb(71 85 105); }
+  }
+  .tap { min-height: 44px; min-width: 44px; }
+  .spin {
+    display: inline-block; width: 1em; height: 1em; border-radius: 9999px;
+    border: 2px solid currentColor; border-right-color: transparent;
+    animation: spin .8s linear infinite; vertical-align: -0.15em;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .bar { transition: width .3s ease; }
+  #toast { bottom: calc(16px + env(safe-area-inset-bottom)); }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 antialiased">
+
+<!-- ===== 合言葉の入力画面 ===== -->
+<section id="keyScreen" class="max-w-md mx-auto px-4 pt-16" hidden>
+  <h1 class="text-2xl font-bold mb-3">家計簿</h1>
+  <p id="keyMsg" class="text-sm text-slate-600 dark:text-slate-300 mb-4 leading-relaxed">
+    はじめに合言葉を入力してください（Apps Script の setup を実行したときにログに出た32文字の英数字）。この端末に保存され、次からは入力不要です。
+  </p>
+  <form id="keyForm" class="grid gap-3">
+    <input id="keyInput" class="field" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="合言葉">
+    <button id="keyBtn" class="tap rounded-xl bg-sky-600 text-white font-bold px-4" type="submit">はじめる</button>
+  </form>
+</section>
+
+<!-- ===== 本体 ===== -->
+<div id="app" class="max-w-3xl mx-auto px-4" hidden>
+
+  <header class="flex items-center justify-between pt-3 pb-2">
+    <h1 class="text-xl font-bold">家計簿</h1>
+    <div class="flex items-center gap-2">
+      <span id="syncState" class="text-xs text-slate-500 dark:text-slate-400"></span>
+      <button id="settingsBtn" class="tap rounded-xl text-xl" type="button" aria-label="設定">⚙️</button>
+    </div>
+  </header>
+
+  <!-- エラー表示 -->
+  <div id="errorBox" class="mb-3 rounded-xl bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200 px-4 py-3 text-sm" hidden></div>
+
+  <!-- 設定 -->
+  <section id="settingsPanel" class="mb-4 rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4" hidden>
+    <h2 class="font-bold mb-3">設定：1日の目標</h2>
+    <form id="settingsForm" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <label class="text-sm">kcal<input id="goalKcal" class="field mt-1" type="text" inputmode="numeric"></label>
+      <label class="text-sm">P（g）<input id="goalP" class="field mt-1" type="text" inputmode="decimal"></label>
+      <label class="text-sm">F（g）<input id="goalF" class="field mt-1" type="text" inputmode="decimal"></label>
+      <label class="text-sm">C（g）<input id="goalC" class="field mt-1" type="text" inputmode="decimal"></label>
+      <button id="settingsSave" class="tap col-span-2 sm:col-span-4 rounded-xl bg-sky-600 text-white font-bold" type="submit">目標を保存</button>
+    </form>
+    <hr class="my-4 border-slate-200 dark:border-slate-700">
+    <button id="forgetBtn" class="tap w-full rounded-xl border border-red-300 text-red-600 dark:border-red-800 dark:text-red-300 text-sm" type="button">
+      この端末から合言葉と控えを消す
+    </button>
+  </section>
+
+  <!-- 月の切り替え -->
+  <div class="flex items-center justify-between mb-3">
+    <button id="prevMonth" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-lg" type="button" aria-label="前の月">‹</button>
+    <div id="monthLabel" class="text-lg font-bold"></div>
+    <button id="nextMonth" class="tap rounded-xl bg-white dark:bg-slate-800 shadow-sm text-lg" type="button" aria-label="次の月">›</button>
+  </div>
+
+  <!-- ダッシュボード -->
+  <div class="grid gap-3 sm:grid-cols-2 mb-4">
+    <!-- カード1：お金 -->
+    <section class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4">
+      <h2 id="moneyTitle" class="text-sm font-bold text-slate-500 dark:text-slate-400 mb-2">今月のお金</h2>
+      <dl class="grid grid-cols-3 gap-2 text-center">
+        <div><dt class="text-xs text-slate-500 dark:text-slate-400">収入</dt><dd id="sumIncome" class="font-bold text-base sm:text-lg tabular-nums"></dd></div>
+        <div><dt class="text-xs text-slate-500 dark:text-slate-400">支出</dt><dd id="sumExpense" class="font-bold text-base sm:text-lg tabular-nums"></dd></div>
+        <div><dt class="text-xs text-slate-500 dark:text-slate-400">収支</dt><dd id="sumBalance" class="font-bold text-base sm:text-lg tabular-nums"></dd></div>
+      </dl>
+    </section>
+
+    <!-- カード2：カロリー -->
+    <section class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4">
+      <div class="flex items-center justify-between gap-2 mb-2">
+        <h2 class="text-sm font-bold text-slate-500 dark:text-slate-400">摂取カロリー</h2>
+        <input id="dayPicker" class="field !w-auto !min-h-[40px] !py-1" type="date" aria-label="表示する日">
+      </div>
+      <div class="flex items-baseline justify-between">
+        <div><span id="kcalTotal" class="text-2xl font-bold tabular-nums"></span><span class="text-sm text-slate-500 dark:text-slate-400"> / <span id="kcalGoal"></span> kcal</span></div>
+        <div id="kcalLeft" class="text-xs"></div>
+      </div>
+      <div class="h-3 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden mt-1 mb-3">
+        <div id="kcalBar" class="bar h-full rounded-full bg-sky-500" style="width:0%"></div>
+      </div>
+      <div id="pfcBars" class="grid gap-2"></div>
+    </section>
+  </div>
+
+  <!-- 入力エリア -->
+  <section id="inputArea" class="rounded-2xl bg-white dark:bg-slate-800 shadow-sm p-4 mb-4">
+    <div class="grid grid-cols-2 gap-2 mb-3" role="tablist">
+      <button id="tabMoney" class="tap rounded-xl font-bold" type="button" role="tab">💰 お金</button>
+      <button id="tabMeal" class="tap rounded-xl font-bold" type="button" role="tab">🍚 食事</button>
+    </div>
+
+    <div id="editBar" class="mb-3 flex items-center justify-between rounded-xl bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 px-3 py-1 text-sm" hidden>
+      <span>✏️ 記録を編集中</span>
+      <button id="editCancel" class="tap underline" type="button">やめる</button>
+    </div>
+
+    <!-- お金の入力 -->
+    <form id="moneyForm" class="grid gap-3" novalidate>
+      <div class="grid grid-cols-2 gap-2">
+        <button id="kindExpense" class="tap rounded-xl font-bold border" type="button">支出</button>
+        <button id="kindIncome" class="tap rounded-xl font-bold border" type="button">収入</button>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="text-sm">日付<input id="mDate" class="field mt-1" type="date"></label>
+        <label class="text-sm">カテゴリ<select id="mCat" class="field mt-1"></select></label>
+      </div>
+      <label class="text-sm">項目名<input id="mName" class="field mt-1" type="text" maxlength="100" placeholder="例：コンビニ、給与" enterkeyhint="next"></label>
+      <label class="text-sm">金額（円）<input id="mAmount" class="field mt-1 tabular-nums" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="例：1200" enterkeyhint="done"></label>
+      <label class="text-sm">メモ（任意）<input id="mMemo" class="field mt-1" type="text" maxlength="500"></label>
+      <button id="moneySubmit" class="tap rounded-xl bg-sky-600 text-white font-bold disabled:opacity-60" type="submit">記録する</button>
+    </form>
+
+    <!-- 食事の入力 -->
+    <form id="mealForm" class="grid gap-3" novalidate hidden>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="text-sm">日付<input id="fDate" class="field mt-1" type="date"></label>
+        <label class="text-sm">食事区分<select id="fCat" class="field mt-1"></select></label>
+      </div>
+      <label class="text-sm">項目名<input id="fName" class="field mt-1" type="text" maxlength="100" placeholder="例：コンビニ弁当" enterkeyhint="next"></label>
+      <div class="grid grid-cols-3 gap-2">
+        <label class="text-sm">P（g）<input id="fP" class="field mt-1 tabular-nums" type="text" inputmode="decimal"></label>
+        <label class="text-sm">F（g）<input id="fF" class="field mt-1 tabular-nums" type="text" inputmode="decimal"></label>
+        <label class="text-sm">C（g）<input id="fC" class="field mt-1 tabular-nums" type="text" inputmode="decimal"></label>
+      </div>
+      <label class="text-sm">kcal <span id="kcalHint" class="text-xs text-slate-500 dark:text-slate-400"></span>
+        <input id="fKcal" class="field mt-1 tabular-nums" type="text" inputmode="numeric" placeholder="P・F・C を入れると自動で計算">
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="text-sm">金額（任意・食費）<input id="fAmount" class="field mt-1 tabular-nums" type="text" inputmode="numeric" pattern="[0-9]*"></label>
+        <label class="text-sm">メモ（任意）<input id="fMemo" class="field mt-1" type="text" maxlength="500"></label>
+      </div>
+      <button id="mealSubmit" class="tap rounded-xl bg-orange-500 text-white font-bold disabled:opacity-60" type="submit">記録する</button>
+    </form>
+  </section>
+
+  <!-- 履歴 -->
+  <section class="mb-6">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="font-bold">履歴</h2>
+      <div class="flex gap-1 text-sm" id="filterBtns">
+        <button class="tap px-3 rounded-xl" type="button" data-filter="all">すべて</button>
+        <button class="tap px-3 rounded-xl" type="button" data-filter="money">お金</button>
+        <button class="tap px-3 rounded-xl" type="button" data-filter="meal">食事</button>
+      </div>
+    </div>
+    <div id="history" class="grid gap-3"></div>
+  </section>
+</div>
+
+<!-- お知らせ（トースト） -->
+<div id="toast" class="fixed left-1/2 -translate-x-1/2 z-50 rounded-xl bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-3 text-sm shadow-lg" hidden></div>
+
+<script>
+/*
+ * 家計簿＆カロリー管理 — 画面
+ * ・データは Apps Script のウェブアプリに POST で読み書きする（合言葉を URL に出さない）
+ * ・前回のデータを端末（localStorage）に控えておき、開いた瞬間に表示 → 裏で最新に差し替える
+ * ・ユーザーが入れた文字は textContent で表示する（innerHTML には入れない）
+ */
+
+// ウェブアプリの URL（…/exec）。clasp deploy -i で更新すれば変わらない
+const API_URL = 'https://script.google.com/macros/s/AKfycbwynDSPlBZ0jIuAKdnaQw-sOOjtXzy3ZH4pMwDXprNKSDfncQs7Xc9-6iFcZ8Q6W7aq/exec';
+
+const KEY_STORE = 'kakeibo-key';
+const CACHE_STORE = 'kakeibo-cache';
+const CACHE_MONTHS = 12;   // 端末に控えておく月の数
+
+// サーバーから届くまでの仮の値（サーバーの CATEGORIES・DEFAULT_GOALS と同じ）
+const DEFAULT_CATEGORIES = {
+  '支出': ['食費', '日用品', '交通費', '娯楽', '光熱費', '通信費', 'その他'],
+  '収入': ['給与', '副収入', 'その他'],
+  '食事': ['朝食', '昼食', '夕食', '間食']
+};
+const DEFAULT_GOALS = { kcal: 2000, p: 60, f: 55, c: 280 };
+
+/* ---------- 小さな道具 ---------- */
+
+const $ = id => document.getElementById(id);
+
+/** localStorage は使えない場合（プライベートブラウズなど）もあるので、失敗しても止まらないようにする */
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} }
+};
+
+/** 要素を作る（文字は textContent で入れるので安全） */
+function el(tag, className, text) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+/** 0 埋め */
+const pad = n => String(n).padStart(2, '0');
+
+/** Date → yyyy-MM-dd（端末の時刻で） */
+function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+
+/** 今日（yyyy-MM-dd） */
+function today() { return ymd(new Date()); }
+
+/** yyyy-MM を n か月ずらす（年またぎも正しく） */
+function shiftMonth(month, n) {
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1);
+}
+
+/** 「2026年11月」 */
+function monthText(month) {
+  const [y, m] = month.split('-').map(Number);
+  return y + '年' + m + '月';
+}
+
+/** 「11月6日（木）」 */
+function dayText(day) {
+  const [y, m, d] = day.split('-').map(Number);
+  const w = '日月火水木金土'[new Date(y, m - 1, d).getDay()];
+  return m + '月' + d + '日（' + w + '）';
+}
+
+/** 金額の表示「¥1,234」 */
+function yen(n) { return '¥' + Math.round(n || 0).toLocaleString('ja-JP'); }
+
+/** 数の表示（小数は1けたまで） */
+function num(n) { return (Math.round((n || 0) * 10) / 10).toLocaleString('ja-JP'); }
+
+/** 全角数字・カンマ・空白を直す（サーバーでも同じことをする） */
+function normNum(s) {
+  return String(s || '').trim()
+    .replace(/[０-９．]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[,，\s]/g, '');
+}
+
+/** 入力欄の値を数値に（空や数字でないものは null） */
+function readNum(input) {
+  const s = normNum(input.value);
+  if (s === '' || !/^\d+(\.\d+)?$/.test(s)) return null;
+  return Number(s);
+}
+
+/** P×4 + F×9 + C×4 */
+function pfcToKcal(p, f, c) { return Math.round((p || 0) * 4 + (f || 0) * 9 + (c || 0) * 4); }
+
+/* ---------- 画面の状態 ---------- */
+
+const state = {
+  key: '',
+  month: today().slice(0, 7),   // 表示中の月
+  day: today(),                 // カロリーを表示する日（月と連動）
+  records: [],                  // 表示中の月の記録
+  goals: Object.assign({}, DEFAULT_GOALS),
+  categories: DEFAULT_CATEGORIES,
+  filter: 'all',                // 履歴の絞り込み：all / money / meal
+  tab: 'money',                 // 入力タブ：money / meal
+  moneyKind: '支出',            // お金の入力：支出 / 収入
+  editingId: null,              // 編集中の記録の ID（新規なら null）
+  kcalManual: false,            // kcal を手で入れたか（入れたら自動計算しない）
+  loadSeq: 0,                   // 読み込みの番号（古い返事で上書きしないため）
+  lastLoad: 0,
+  busy: false
+};
+
+/* ---------- 端末の控え（前回のデータ） ---------- */
+
+function readCache() {
+  try { return JSON.parse(store.get(CACHE_STORE) || 'null') || { months: {} }; } catch (e) { return { months: {} }; }
+}
+
+/** サーバーから届いた月のデータを控える（古い月から捨てて、最大 CACHE_MONTHS か月） */
+function saveCache(data) {
+  const c = readCache();
+  c.months = c.months || {};
+  if (data.month && data.records) c.months[data.month] = { records: data.records, at: Date.now() };
+  if (data.goals) c.goals = data.goals;
+  if (data.categories) c.categories = data.categories;
+  const keys = Object.keys(c.months).sort((a, b) => c.months[b].at - c.months[a].at);
+  keys.slice(CACHE_MONTHS).forEach(k => { delete c.months[k]; });
+  store.set(CACHE_STORE, JSON.stringify(c));
+}
+
+/** 控えから、表示中の月を画面に出す（無ければ false） */
+function showFromCache() {
+  const c = readCache();
+  if (c.goals) state.goals = c.goals;
+  if (c.categories) state.categories = c.categories;
+  const m = c.months && c.months[state.month];
+  state.records = m ? m.records : [];
+  return !!m;
+}
+
+/* ---------- サーバーとのやり取り ---------- */
+
+/**
+ * Apps Script を呼ぶ。Content-Type を text/plain にすると、事前の確認通信（プリフライト）が起きない。
+ * 失敗したら日本語の理由つきでエラーを投げる。
+ */
+async function api(action, args) {
+  if (!/^https:\/\//.test(API_URL)) throw new Error('index.html の API_URL（ウェブアプリのURL）がまだ設定されていません');
+  let res;
+  try {
+    res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: action, key: state.key, args: args || {} })
+    });
+  } catch (e) {
+    throw new Error('通信できませんでした。電波の状態を確かめて、もう一度お試しください');
+  }
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error('サーバーから思わぬ返事が来ました（ウェブアプリのデプロイ設定や権限の承認を確かめてください）');
+  }
+  if (!data || !data.ok) {
+    if (data && data.error === 'bad_key') {
+      forgetKey();
+      showKeyScreen('合言葉が違います。もう一度入力してください。');
+      const err = new Error('合言葉が違います');
+      err.badKey = true;
+      throw err;
+    }
+    throw new Error((data && data.message) || 'うまくいきませんでした');
+  }
+  return data;
+}
+
+/** 書き込み・読み込みの返事（月のデータ一式）を画面に反映する */
+function applyMonthData(data) {
+  saveCache(data);
+  if (data.goals) state.goals = data.goals;
+  if (data.categories) state.categories = data.categories;
+  if (data.month === state.month) state.records = data.records;
+  renderAll();
+}
+
+/** 表示中の月を最新にする */
+async function load() {
+  const seq = ++state.loadSeq;
+  state.lastLoad = Date.now();
+  setSync('loading');
+  try {
+    const data = await api('load', { month: state.month, day: state.day });
+    if (seq !== state.loadSeq) { saveCache(data); return; }   // その間に別の月へ移った
+    hideError();
+    setSync('');   // 先に「更新中」を消してから描く（空の月が「読み込み中」のままにならないように）
+    applyMonthData(data);
+  } catch (e) {
+    if (seq !== state.loadSeq || e.badKey) return;
+    setSync('offline');
+    showError(e.message);
+    renderHistory();   // 読み込み中の表示を消す
+  }
+}
+
+/* ---------- 表示：上の部分 ---------- */
+
+function setSync(s) {
+  state.syncing = s === 'loading';
+  const box = $('syncState');
+  box.textContent = '';
+  if (s === 'loading') { box.appendChild(el('span', 'spin')); box.appendChild(document.createTextNode(' 更新中')); }
+  else if (s === 'offline') box.textContent = '前回の内容を表示中';
+}
+
+function showError(msg) { $('errorBox').textContent = msg; $('errorBox').hidden = false; }
+function hideError() { $('errorBox').hidden = true; }
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2500);
+}
+
+/* ---------- 表示：ダッシュボード ---------- */
+
+/** 月のお金の集計（食事の金額も食費として支出に入れる。サーバーの moneySummary_ と同じ） */
+function moneySummary(records) {
+  let income = 0, expense = 0;
+  records.forEach(r => {
+    if (r.amount == null) return;
+    if (r.kind === '収入') income += r.amount; else expense += r.amount;
+  });
+  return { income, expense, balance: income - expense };
+}
+
+/** 指定日の食事の合計（サーバーの mealSummary_ と同じ） */
+function mealTotal(records, day) {
+  const t = { kcal: 0, p: 0, f: 0, c: 0 };
+  records.forEach(r => {
+    if (r.kind !== '食事' || r.date !== day) return;
+    t.kcal += r.kcal || 0; t.p += r.p || 0; t.f += r.f || 0; t.c += r.c || 0;
+  });
+  return t;
+}
+
+function renderDashboard() {
+  $('monthLabel').textContent = monthText(state.month);
+  $('moneyTitle').textContent = (state.month === today().slice(0, 7) ? '今月' : monthText(state.month)) + 'のお金';
+
+  const s = moneySummary(state.records);
+  $('sumIncome').textContent = yen(s.income);
+  $('sumExpense').textContent = yen(s.expense);
+  const bal = $('sumBalance');
+  bal.textContent = (s.balance > 0 ? '+' : s.balance < 0 ? '−' : '') + yen(Math.abs(s.balance));
+  bal.className = 'font-bold text-base sm:text-lg tabular-nums ' +
+    (s.balance > 0 ? 'text-emerald-600 dark:text-emerald-400' : s.balance < 0 ? 'text-red-600 dark:text-red-400' : '');
+
+  // カロリー
+  $('dayPicker').value = state.day;
+  const t = mealTotal(state.records, state.day);
+  const g = state.goals;
+  $('kcalTotal').textContent = Math.round(t.kcal).toLocaleString('ja-JP');
+  $('kcalGoal').textContent = Math.round(g.kcal).toLocaleString('ja-JP');
+  const left = Math.round(g.kcal - t.kcal);
+  const leftBox = $('kcalLeft');
+  leftBox.textContent = left >= 0 ? 'あと ' + left.toLocaleString('ja-JP') + ' kcal' : Math.abs(left).toLocaleString('ja-JP') + ' kcal オーバー';
+  leftBox.className = 'text-xs ' + (left >= 0 ? 'text-slate-500 dark:text-slate-400' : 'text-red-600 dark:text-red-400 font-bold');
+  setBar($('kcalBar'), t.kcal, g.kcal, 'bg-sky-500');
+
+  // P・F・C のバー
+  const box = $('pfcBars');
+  box.textContent = '';
+  [['p', 'P たんぱく質', 'bg-rose-400'], ['f', 'F 脂質', 'bg-amber-400'], ['c', 'C 炭水化物', 'bg-emerald-400']].forEach(([k, label, color]) => {
+    const row = el('div');
+    const head = el('div', 'flex justify-between text-xs mb-1');
+    head.appendChild(el('span', '', label));
+    head.appendChild(el('span', 'tabular-nums text-slate-500 dark:text-slate-400', num(t[k]) + ' / ' + num(g[k]) + ' g'));
+    const track = el('div', 'h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden');
+    const bar = el('div', 'bar h-full rounded-full');
+    setBar(bar, t[k], g[k], color);
+    track.appendChild(bar);
+    row.appendChild(head);
+    row.appendChild(track);
+    box.appendChild(row);
+  });
+}
+
+/** 進捗バーの長さと色（目標を超えたら赤） */
+function setBar(bar, value, goal, color) {
+  const pct = goal > 0 ? Math.min(100, value / goal * 100) : 0;
+  bar.style.width = pct + '%';
+  bar.className = 'bar h-full rounded-full ' + (goal > 0 && value > goal ? 'bg-red-500' : color);
+}
+
+/* ---------- 表示：履歴 ---------- */
+
+const BADGE = {
+  '支出': 'bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-200',
+  '収入': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200',
+  '食事': 'bg-orange-100 text-orange-700 dark:bg-orange-900/60 dark:text-orange-200'
+};
+
+function renderHistory() {
+  const box = $('history');
+  box.textContent = '';
+
+  document.querySelectorAll('#filterBtns button').forEach(b => {
+    const on = b.dataset.filter === state.filter;
+    b.className = 'tap px-3 rounded-xl ' + (on ? 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-white dark:bg-slate-800');
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+
+  const list = state.records.filter(r =>
+    state.filter === 'all' ? true : state.filter === 'meal' ? r.kind === '食事' : r.kind !== '食事');
+
+  if (!list.length) {
+    if (state.syncing) {
+      const p = el('p', 'text-center text-slate-500 py-8');
+      p.appendChild(el('span', 'spin'));
+      p.appendChild(document.createTextNode(' 読み込み中…'));
+      box.appendChild(p);
+    } else {
+      box.appendChild(el('p', 'text-center text-slate-500 dark:text-slate-400 py-8 text-sm', monthText(state.month) + 'の記録はまだありません'));
+    }
+    return;
+  }
+
+  // 日付ごとにまとめる（サーバーから日付の新しい順で届く）
+  const groups = [];
+  list.forEach(r => {
+    if (!groups.length || groups[groups.length - 1].date !== r.date) groups.push({ date: r.date, items: [] });
+    groups[groups.length - 1].items.push(r);
+  });
+
+  groups.forEach(g => {
+    const sec = el('section', 'rounded-2xl bg-white dark:bg-slate-800 shadow-sm overflow-hidden');
+    const head = el('div', 'flex justify-between items-baseline px-4 py-2 bg-slate-100 dark:bg-slate-700/60 text-sm');
+    head.appendChild(el('span', 'font-bold', dayText(g.date)));
+    let spend = 0, kcal = 0;
+    g.items.forEach(r => { if (r.kind !== '収入') spend += r.amount || 0; if (r.kind === '食事') kcal += r.kcal || 0; });
+    const sub = [];
+    if (spend) sub.push('支出 ' + yen(spend));
+    if (kcal) sub.push(Math.round(kcal).toLocaleString('ja-JP') + ' kcal');
+    head.appendChild(el('span', 'text-xs text-slate-500 dark:text-slate-300 tabular-nums', sub.join('・')));
+    sec.appendChild(head);
+
+    const ul = el('ul', 'divide-y divide-slate-100 dark:divide-slate-700');
+    g.items.forEach(r => ul.appendChild(historyRow(r)));
+    sec.appendChild(ul);
+    box.appendChild(sec);
+  });
+}
+
+/** 履歴の1行 */
+function historyRow(r) {
+  const li = el('li', 'flex items-center gap-2 pl-4 pr-1 py-2');
+  const main = el('div', 'flex-1 min-w-0');
+
+  const line1 = el('div', 'flex items-center gap-2 min-w-0');
+  line1.appendChild(el('span', 'shrink-0 text-xs font-bold rounded-md px-1.5 py-0.5 ' + (BADGE[r.kind] || ''), r.kind));
+  line1.appendChild(el('span', 'shrink-0 text-xs text-slate-500 dark:text-slate-400', r.cat));
+  line1.appendChild(el('span', 'truncate', r.name || r.cat));
+  main.appendChild(line1);
+
+  const info = [];
+  if (r.kind === '食事') {
+    const pfc = [];
+    if (r.p != null) pfc.push('P' + num(r.p));
+    if (r.f != null) pfc.push('F' + num(r.f));
+    if (r.c != null) pfc.push('C' + num(r.c));
+    if (pfc.length) info.push(pfc.join(' '));
+  }
+  if (r.memo) info.push(r.memo);
+  if (info.length) main.appendChild(el('div', 'text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5', info.join('　')));
+  li.appendChild(main);
+
+  // 右側：金額・kcal
+  const right = el('div', 'text-right shrink-0 tabular-nums');
+  if (r.amount != null) {
+    right.appendChild(el('div', 'font-bold ' + (r.kind === '収入' ? 'text-emerald-600 dark:text-emerald-400' : ''),
+      (r.kind === '収入' ? '+' : '') + yen(r.amount)));
+  }
+  if (r.kind === '食事' && r.kcal != null) right.appendChild(el('div', 'text-xs text-orange-600 dark:text-orange-300', Math.round(r.kcal).toLocaleString('ja-JP') + ' kcal'));
+  li.appendChild(right);
+
+  const edit = el('button', 'tap rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700', '✏️');
+  edit.type = 'button';
+  edit.setAttribute('aria-label', '編集');
+  edit.onclick = () => startEdit(r);
+  const del = el('button', 'tap rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700', '🗑️');
+  del.type = 'button';
+  del.setAttribute('aria-label', '削除');
+  del.onclick = () => removeRecord(r, del);
+  li.appendChild(edit);
+  li.appendChild(del);
+  return li;
+}
+
+/* ---------- 入力フォーム ---------- */
+
+/** 時間帯から食事区分を選ぶ（初期値） */
+function mealByTime() {
+  const h = new Date().getHours();
+  return h < 10 ? '朝食' : h < 15 ? '昼食' : h < 17 ? '間食' : '夕食';
+}
+
+/** select に選択肢を入れる（今の選択はできるだけ残す） */
+function fillSelect(sel, items, keep) {
+  const cur = keep || sel.value;
+  sel.textContent = '';
+  items.forEach(v => { const o = el('option', '', v); o.value = v; sel.appendChild(o); });
+  if (items.indexOf(cur) >= 0) sel.value = cur;
+}
+
+function renderForms() {
+  // タブ
+  const on = 'bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900';
+  const off = 'bg-slate-100 dark:bg-slate-700';
+  $('tabMoney').className = 'tap rounded-xl font-bold ' + (state.tab === 'money' ? on : off);
+  $('tabMeal').className = 'tap rounded-xl font-bold ' + (state.tab === 'meal' ? on : off);
+  $('tabMoney').setAttribute('aria-selected', state.tab === 'money');
+  $('tabMeal').setAttribute('aria-selected', state.tab === 'meal');
+  $('moneyForm').hidden = state.tab !== 'money';
+  $('mealForm').hidden = state.tab !== 'meal';
+
+  // 支出・収入の切り替え
+  const exp = state.moneyKind === '支出';
+  $('kindExpense').className = 'tap rounded-xl font-bold border ' + (exp ? 'bg-red-500 border-red-500 text-white' : 'border-slate-300 dark:border-slate-600');
+  $('kindIncome').className = 'tap rounded-xl font-bold border ' + (!exp ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 dark:border-slate-600');
+  $('kindExpense').setAttribute('aria-pressed', exp);
+  $('kindIncome').setAttribute('aria-pressed', !exp);
+  fillSelect($('mCat'), state.categories[state.moneyKind] || []);
+  fillSelect($('fCat'), state.categories['食事'] || []);
+
+  // 編集中の表示
+  $('editBar').hidden = !state.editingId;
+  const label = state.editingId ? '更新する' : '記録する';
+  if (!state.busy) { $('moneySubmit').textContent = label; $('mealSubmit').textContent = label; }
+}
+
+/** PFC から kcal を自動計算（kcal を手で入れたときは何もしない） */
+function autoKcal() {
+  const p = readNum($('fP')), f = readNum($('fF')), c = readNum($('fC'));
+  const has = p != null || f != null || c != null;
+  if (!state.kcalManual) {
+    $('fKcal').value = has ? String(pfcToKcal(p, f, c)) : '';
+    $('kcalHint').textContent = has ? '（P・F・C から自動計算）' : '';
+  } else {
+    $('kcalHint').textContent = '（手入力）';
+  }
+}
+
+/** 入力欄を空にする（日付と分類は残す） */
+function resetForm(which) {
+  if (which === 'money') {
+    $('mName').value = ''; $('mAmount').value = ''; $('mMemo').value = '';
+  } else {
+    ['fName', 'fP', 'fF', 'fC', 'fKcal', 'fAmount', 'fMemo'].forEach(id => { $(id).value = ''; });
+    state.kcalManual = false;
+    autoKcal();
+  }
+}
+
+/** 編集をやめる */
+function cancelEdit() {
+  state.editingId = null;
+  resetForm('money');
+  resetForm('meal');
+  renderForms();
+}
+
+/** 履歴の ✏️：その記録をフォームに読み込む */
+function startEdit(r) {
+  state.editingId = r.id;
+  const v = x => (x == null ? '' : String(x));
+  if (r.kind === '食事') {
+    state.tab = 'meal';
+    renderForms();
+    $('fDate').value = r.date; $('fCat').value = r.cat; $('fName').value = r.name;
+    $('fP').value = v(r.p); $('fF').value = v(r.f); $('fC').value = v(r.c);
+    $('fAmount').value = v(r.amount); $('fMemo').value = r.memo;
+    // 保存されている kcal が PFC の計算と違えば「手入力」扱いにする
+    const calc = (r.p != null || r.f != null || r.c != null) ? pfcToKcal(r.p, r.f, r.c) : null;
+    state.kcalManual = calc == null || calc !== r.kcal;
+    $('fKcal').value = v(r.kcal);
+    autoKcal();
+  } else {
+    state.tab = 'money';
+    state.moneyKind = r.kind;
+    renderForms();
+    $('mDate').value = r.date; $('mCat').value = r.cat; $('mName').value = r.name;
+    $('mAmount').value = v(r.amount); $('mMemo').value = r.memo;
+  }
+  renderForms();
+  $('inputArea').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** 送信中はボタンを押せなくする */
+function setBusy(btn, busy) {
+  state.busy = busy;
+  $('moneySubmit').disabled = busy;
+  $('mealSubmit').disabled = busy;
+  if (busy) {
+    btn.textContent = '';
+    btn.appendChild(el('span', 'spin'));
+    btn.appendChild(document.createTextNode(' 保存中…'));
+  }
+}
+
+/** 追加・更新を送る */
+async function submitRecord(which) {
+  if (state.busy) return;
+  let record;
+  if (which === 'money') {
+    record = {
+      kind: state.moneyKind, date: $('mDate').value, cat: $('mCat').value,
+      name: $('mName').value, amount: normNum($('mAmount').value), memo: $('mMemo').value
+    };
+    if (!record.amount) { toast('金額を入れてください'); $('mAmount').focus(); return; }
+  } else {
+    record = {
+      kind: '食事', date: $('fDate').value, cat: $('fCat').value, name: $('fName').value,
+      kcal: normNum($('fKcal').value), p: normNum($('fP').value), f: normNum($('fF').value), c: normNum($('fC').value),
+      amount: normNum($('fAmount').value), memo: $('fMemo').value
+    };
+    if (!record.kcal && !record.p && !record.f && !record.c) { toast('kcal か P・F・C を入れてください'); $('fKcal').focus(); return; }
+  }
+  if (!record.date) { toast('日付を選んでください'); return; }
+
+  const btn = which === 'money' ? $('moneySubmit') : $('mealSubmit');
+  const editing = state.editingId;
+  setBusy(btn, true);
+  try {
+    const args = { record: record, month: state.month, day: state.day };
+    if (editing) args.id = editing;
+    const data = await api(editing ? 'update' : 'add', args);
+    hideError();
+    applyMonthData(data);
+    const other = record.date.slice(0, 7) !== state.month ? '（' + monthText(record.date.slice(0, 7)) + 'の記録）' : '';
+    toast((editing ? '更新しました' : '記録しました') + other);
+    state.editingId = null;
+    resetForm(which);
+  } catch (e) {
+    if (!e.badKey) { toast(e.message); showError(e.message); }
+  } finally {
+    setBusy(btn, false);
+    renderForms();
+  }
+}
+
+/** 履歴の 🗑️：確認してから削除 */
+async function removeRecord(r, btn) {
+  const label = (r.name || r.cat) + '（' + dayText(r.date) + '）';
+  if (!confirm('「' + label + '」を削除しますか？\n元に戻せません。')) return;
+  btn.disabled = true;
+  btn.textContent = '';
+  btn.appendChild(el('span', 'spin'));
+  try {
+    const data = await api('delete', { id: r.id, month: state.month, day: state.day });
+    hideError();
+    if (state.editingId === r.id) cancelEdit();
+    applyMonthData(data);
+    toast('削除しました');
+  } catch (e) {
+    if (!e.badKey) { toast(e.message); showError(e.message); }
+    renderHistory();
+  }
+}
+
+/* ---------- 設定 ---------- */
+
+function fillSettings() {
+  $('goalKcal').value = state.goals.kcal;
+  $('goalP').value = state.goals.p;
+  $('goalF').value = state.goals.f;
+  $('goalC').value = state.goals.c;
+}
+
+async function saveSettings(ev) {
+  ev.preventDefault();
+  const btn = $('settingsSave');
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const data = await api('saveSettings', { goals: {
+      kcal: normNum($('goalKcal').value), p: normNum($('goalP').value), f: normNum($('goalF').value), c: normNum($('goalC').value)
+    } });
+    state.goals = data.goals;
+    saveCache({ goals: data.goals });
+    fillSettings();
+    renderDashboard();
+    toast('目標を保存しました');
+  } catch (e) {
+    if (!e.badKey) toast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '目標を保存';
+  }
+}
+
+/** 合言葉と控えを端末から消す */
+function forgetKey() {
+  store.del(KEY_STORE);
+  store.del(CACHE_STORE);
+  state.key = '';
+  state.records = [];
+}
+
+/* ---------- 合言葉の画面 ---------- */
+
+function showKeyScreen(msg) {
+  $('app').hidden = true;
+  $('keyScreen').hidden = false;
+  if (msg) $('keyMsg').textContent = msg;
+  $('keyInput').value = '';
+}
+
+function showApp() {
+  $('keyScreen').hidden = true;
+  $('app').hidden = false;
+}
+
+/* ---------- 全体の描き直し ---------- */
+
+function renderAll() {
+  renderDashboard();
+  renderForms();
+  renderHistory();
+  if ($('settingsPanel').hidden) fillSettings();
+}
+
+/** 表示する月を変える（日は「その月の今日」、無ければ1日） */
+function goMonth(month, day) {
+  state.month = month;
+  const t = today();
+  state.day = day || (t.slice(0, 7) === month ? t : month + '-01');
+  showFromCache();
+  renderAll();
+  load();
+}
+
+/* ---------- 起動 ---------- */
+
+function init() {
+  // ?key=… が付いていたら保存して、アドレス欄と履歴から消す
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('key')) {
+    store.set(KEY_STORE, qs.get('key').trim());
+    qs.delete('key');
+    try { history.replaceState(null, '', location.pathname + (qs.toString() ? '?' + qs : '') + location.hash); } catch (e) {}
+  }
+  state.key = store.get(KEY_STORE) || '';
+
+  // 入力欄の初期値
+  $('mDate').value = today();
+  $('fDate').value = today();
+  fillSelect($('fCat'), DEFAULT_CATEGORIES['食事'], mealByTime());
+
+  // ボタンなど
+  $('keyForm').addEventListener('submit', ev => {
+    ev.preventDefault();
+    const v = $('keyInput').value.trim();
+    if (!v) return;
+    store.set(KEY_STORE, v);
+    state.key = v;
+    $('keyMsg').textContent = '確認しています…';
+    showApp();
+    goMonth(state.month, state.day);
+  });
+  $('prevMonth').onclick = () => goMonth(shiftMonth(state.month, -1));
+  $('nextMonth').onclick = () => goMonth(shiftMonth(state.month, 1));
+  $('dayPicker').addEventListener('change', () => {
+    const d = $('dayPicker').value;
+    if (!d) { $('dayPicker').value = state.day; return; }
+    if (d.slice(0, 7) !== state.month) goMonth(d.slice(0, 7), d);   // 別の月の日なら月も移る
+    else { state.day = d; renderDashboard(); }
+  });
+  $('tabMoney').onclick = () => { state.tab = 'money'; renderForms(); };
+  $('tabMeal').onclick = () => { state.tab = 'meal'; renderForms(); };
+  $('kindExpense').onclick = () => { state.moneyKind = '支出'; renderForms(); };
+  $('kindIncome').onclick = () => { state.moneyKind = '収入'; renderForms(); };
+  $('moneyForm').addEventListener('submit', ev => { ev.preventDefault(); submitRecord('money'); });
+  $('mealForm').addEventListener('submit', ev => { ev.preventDefault(); submitRecord('meal'); });
+  ['fP', 'fF', 'fC'].forEach(id => $(id).addEventListener('input', autoKcal));
+  $('fKcal').addEventListener('input', () => {
+    state.kcalManual = $('fKcal').value.trim() !== '';   // 空にしたら自動計算に戻る
+    if (!state.kcalManual) autoKcal(); else $('kcalHint').textContent = '（手入力）';
+  });
+  $('editCancel').onclick = cancelEdit;
+  document.querySelectorAll('#filterBtns button').forEach(b => {
+    b.onclick = () => { state.filter = b.dataset.filter; renderHistory(); };
+  });
+  $('settingsBtn').onclick = () => { const p = $('settingsPanel'); p.hidden = !p.hidden; if (!p.hidden) fillSettings(); };
+  $('settingsForm').addEventListener('submit', saveSettings);
+  $('forgetBtn').onclick = () => {
+    if (!confirm('この端末から合言葉と前回データの控えを消します。\nスプレッドシートのデータは消えません。よろしいですか？')) return;
+    forgetKey();
+    $('settingsPanel').hidden = true;
+    showKeyScreen('合言葉を消しました。使うときはもう一度入力してください。');
+  };
+
+  // 別のアプリから戻ってきたら最新にする（5秒以内の連続は省く）
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.key && Date.now() - state.lastLoad > 5000) {
+      // 日付が変わっていたら「今日」に合わせる
+      const t = today();
+      if (state.month === state.lastToday.slice(0, 7) && state.day === state.lastToday && t !== state.lastToday) {
+        state.lastToday = t;
+        goMonth(t.slice(0, 7), t);
+        return;
+      }
+      load();
+    }
+  });
+  state.lastToday = today();
+
+  if (!state.key) { showKeyScreen(); return; }
+  showApp();
+  const cached = showFromCache();
+  state.syncing = !cached;
+  renderAll();
+  load();
+}
+
+init();
+</script>
+</body>
+</html>
